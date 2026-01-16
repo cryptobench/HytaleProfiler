@@ -1,6 +1,7 @@
 package com.hytaleprofiler;
 
 import com.hytaleprofiler.collector.EntityCollector;
+import com.hytaleprofiler.collector.EventTimingCollector;
 import com.hytaleprofiler.collector.JVMMetricsCollector;
 import com.hytaleprofiler.collector.SystemMetricsCollector;
 import com.hytaleprofiler.collector.TPSCollector;
@@ -13,7 +14,8 @@ import java.nio.file.Path;
 
 /**
  * HytaleProfiler - Server profiler for Hytale servers.
- * Provides deep insight into TPS bottlenecks, system performance, entity counts, and memory usage.
+ * Provides deep insight into TPS bottlenecks, system performance,
+ * event handler timing, entity counts, and memory usage.
  */
 public class HytaleProfiler extends JavaPlugin {
 
@@ -25,6 +27,7 @@ public class HytaleProfiler extends JavaPlugin {
     private SystemMetricsCollector systemMetricsCollector;
     private EntityCollector entityCollector;
     private JVMMetricsCollector jvmMetricsCollector;
+    private EventTimingCollector eventTimingCollector;
 
     public HytaleProfiler(JavaPluginInit init) {
         super(init);
@@ -41,6 +44,11 @@ public class HytaleProfiler extends JavaPlugin {
         systemMetricsCollector = new SystemMetricsCollector();
         entityCollector = new EntityCollector();
         jvmMetricsCollector = new JVMMetricsCollector();
+        eventTimingCollector = new EventTimingCollector();
+
+        // Register event timing hooks
+        eventTimingCollector.registerTimingHooks(getEventRegistry());
+        logger.atInfo().log("Event timing hooks registered.");
 
         // Register command
         getCommandRegistry().registerCommand(new ProfilerCommand(this));
@@ -76,6 +84,10 @@ public class HytaleProfiler extends JavaPlugin {
 
     public JVMMetricsCollector getJvmMetricsCollector() {
         return jvmMetricsCollector;
+    }
+
+    public EventTimingCollector getEventTimingCollector() {
+        return eventTimingCollector;
     }
 
     public Path getExportDirectory() {

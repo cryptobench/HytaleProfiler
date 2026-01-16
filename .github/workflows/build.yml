@@ -28,8 +28,8 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: EasySigns
-          path: target/EasySigns-*.jar
+          name: HytaleProfiler
+          path: target/HytaleProfiler-*.jar
 
   release:
     needs: build
@@ -43,20 +43,20 @@ jobs:
       - name: Download artifact
         uses: actions/download-artifact@v4
         with:
-          name: EasySigns
+          name: HytaleProfiler
 
       - name: Generate version
         id: version
         run: echo "version=v1.0.${{ github.run_number }}" >> $GITHUB_OUTPUT
 
       - name: Rename JAR
-        run: mv EasySigns-*.jar EasySigns-${{ steps.version.outputs.version }}.jar
+        run: mv HytaleProfiler-*.jar HytaleProfiler-${{ steps.version.outputs.version }}.jar
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ steps.version.outputs.version }}
-          name: EasySigns ${{ steps.version.outputs.version }}
+          name: HytaleProfiler ${{ steps.version.outputs.version }}
           generate_release_notes: true
           append_body: true
           body: |
@@ -65,21 +65,23 @@ jobs:
 
             ## Installation
 
-            1. Download `EasySigns-${{ steps.version.outputs.version }}.jar` below
+            1. Download `HytaleProfiler-${{ steps.version.outputs.version }}.jar` below
             2. Drop it in your server's `mods` folder
             3. Restart your server
 
             ## Quick Start
 
             ```
-            /sign Hello World!
-            /sign list
-            /sign edit <id> New text here
+            /profiler summary
+            /profiler tps
+            /profiler systems
+            /profiler events
+            /profiler memory
             ```
 
             See [README](../../blob/master/README.md) for full documentation.
 
-          files: EasySigns-${{ steps.version.outputs.version }}.jar
+          files: HytaleProfiler-${{ steps.version.outputs.version }}.jar
           draft: false
           prerelease: false
           make_latest: true

@@ -5,18 +5,18 @@ import com.google.gson.GsonBuilder;
 import com.hytaleprofiler.HytaleProfiler;
 import com.hytaleprofiler.data.*;
 import com.hytaleprofiler.util.FormatUtil;
+import com.hytaleprofiler.collector.EventTimingCollector;
 import com.hypixel.hytale.component.Ref;
 import com.hypixel.hytale.component.Store;
 import com.hypixel.hytale.server.core.Message;
 import com.hypixel.hytale.server.core.command.system.CommandContext;
-import com.hypixel.hytale.server.core.command.system.arguments.system.OptionalArg;
-import com.hypixel.hytale.server.core.command.system.arguments.types.ArgTypes;
 import com.hypixel.hytale.server.core.command.system.basecommands.AbstractPlayerCommand;
 import com.hypixel.hytale.server.core.entity.entities.Player;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
 import com.hypixel.hytale.server.core.universe.world.World;
 import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
 
+import javax.annotation.Nonnull;
 import java.awt.Color;
 import java.io.FileWriter;
 import java.io.IOException;
@@ -42,37 +42,54 @@ public class ProfilerCommand extends AbstractPlayerCommand {
     private static final Color AQUA = new Color(85, 255, 255);
 
     private final HytaleProfiler plugin;
-    private final OptionalArg<String> subcommandArg;
-    private final OptionalArg<Integer> countArg;
 
     public ProfilerCommand(HytaleProfiler plugin) {
         super("profiler", "Server profiler commands");
         this.plugin = plugin;
-        this.subcommandArg = withOptionalArg("subcommand", "Subcommand (summary/tps/mods/systems/top/entities/memory/export/gc/reset)", ArgTypes.STRING);
-        this.countArg = withOptionalArg("count", "Number of items to show", ArgTypes.INTEGER);
+        setAllowsExtraArguments(true);
         requirePermission("profiler.use");
     }
 
     @Override
-    protected void execute(CommandContext ctx, Store<EntityStore> store, Ref<EntityStore> playerRef, PlayerRef playerData, World world) {
-        String subcommand = subcommandArg.get(ctx);
+    protected void execute(@Nonnull CommandContext ctx,
+                          @Nonnull Store<EntityStore> store,
+                          @Nonnull Ref<EntityStore> playerRef,
+                          @Nonnull PlayerRef playerData,
+                          @Nonnull World world) {
 
-        if (subcommand == null || subcommand.isEmpty()) {
+        // Parse arguments - everything after "/profiler "
+        String input = ctx.getInputString().trim();
+        String afterCommand = input.length() > 9 ? input.substring(9).trim() : "";
+
+        if (afterCommand.isEmpty()) {
             showHelp(playerData);
             return;
         }
 
-        switch (subcommand.toLowerCase()) {
+        // Parse subcommand and optional count argument
+        String[] parts = afterCommand.split("\\s+");
+        String subcommand = parts[0].toLowerCase();
+        Integer count = null;
+        if (parts.length > 1) {
+            try {
+                count = Integer.parseInt(parts[1]);
+            } catch (NumberFormatException ignored) {
+            }
+        }
+
+        switch (subcommand) {
             case "summary" -> showSummary(playerData, world);
             case "tps" -> showTPS(playerData, world);
             case "mods" -> showMods(playerData, world);
-            case "systems" -> showSystems(playerData, world, countArg.get(ctx));
-            case "top" -> showTop(playerData, world, countArg.get(ctx));
+            case "systems" -> showSystems(playerData, world, count);
+            case "top" -> showTop(playerData, world, count);
+            case "events" -> showEvents(playerData, count);
             case "entities" -> showEntities(playerData, world);
             case "memory" -> showMemory(playerData);
             case "export" -> exportReport(playerData, store, playerRef, world);
             case "gc" -> triggerGC(playerData, store, playerRef);
             case "reset" -> resetMetrics(playerData, store, playerRef);
+            case "help" -> showHelp(playerData);
             default -> showHelp(playerData);
         }
     }
@@ -84,6 +101,7 @@ public class ProfilerCommand extends AbstractPlayerCommand {
         sendMessage(playerData, "/profiler mods       - Per-mod timing breakdown", GRAY);
         sendMessage(playerData, "/profiler systems [n]- ECS system timing (default: 10)", GRAY);
         sendMessage(playerData, "/profiler top [n]    - Top N slowest systems", GRAY);
+        sendMessage(playerData, "/profiler events [n] - Event handler timing", GRAY);
         sendMessage(playerData, "/profiler entities   - Entity counts by type", GRAY);
         sendMessage(playerData, "/profiler memory     - JVM memory & GC stats", GRAY);
         sendMessage(playerData, "/profiler export     - Export full report to JSON", GRAY);
@@ -98,8 +116,11 @@ public class ProfilerCommand extends AbstractPlayerCommand {
         List<ModProfile> mods = plugin.getSystemMetricsCollector().aggregateByMod(systems);
         EntityData entities = plugin.getEntityCollector().collect(world);
         JVMData jvm = plugin.getJvmMetricsCollector().collect();
+        EventTimingCollector eventCollector = plugin.getEventTimingCollector();
 
         double totalSystemMs = plugin.getSystemMetricsCollector().getTotalSystemTimeMs(systems);
+        double totalEventMs = eventCollector.getTotalEventTimeMs();
+        long totalEventCalls = eventCollector.getTotalEventCount();
 
         sendMessage(playerData, "========== Server Profiler ==========", GOLD);
 
@@ -131,6 +152,11 @@ public class ProfilerCommand extends AbstractPlayerCommand {
             systems.size(), FormatUtil.formatMs(totalSystemMs));
         sendMessage(playerData, systemLine, WHITE);
 
+        // Event handler timing
+        String eventLine = String.format("Events: %s calls | Total time: %s",
+            FormatUtil.formatCount(totalEventCalls), FormatUtil.formatMs(totalEventMs));
+        sendMessage(playerData, eventLine, WHITE);
+
         // Top slowest systems
         if (!systems.isEmpty()) {
             sendMessage(playerData, "", WHITE);
@@ -142,6 +168,23 @@ public class ProfilerCommand extends AbstractPlayerCommand {
                     rank, sys.getName(),
                     FormatUtil.formatMs(sys.getAvgMs()),
                     FormatUtil.formatPercent(sys.getPercentageOf(totalSystemMs)));
+                sendMessage(playerData, line, GRAY);
+                rank++;
+            }
+        }
+
+        // Top slowest events (if any have been called)
+        List<EventProfile> activeEvents = eventCollector.getActiveProfiles();
+        if (!activeEvents.isEmpty()) {
+            sendMessage(playerData, "", WHITE);
+            sendMessage(playerData, "Slowest Events:", AQUA);
+            int rank = 1;
+            for (EventProfile event : activeEvents) {
+                if (rank > 3) break;
+                String line = String.format("  %d. %s - %s avg (%s calls)",
+                    rank, event.getEventName(),
+                    FormatUtil.formatMs(event.getAvgTimeMs()),
+                    FormatUtil.formatCount(event.getCallCount()));
                 sendMessage(playerData, line, GRAY);
                 rank++;
             }
@@ -260,6 +303,60 @@ public class ProfilerCommand extends AbstractPlayerCommand {
         }
 
         sendMessage(playerData, "==============================", GOLD);
+    }
+
+    private void showEvents(PlayerRef playerData, Integer count) {
+        int limit = count != null && count > 0 ? count : 10;
+        EventTimingCollector eventCollector = plugin.getEventTimingCollector();
+        List<EventProfile> events = eventCollector.getProfiles();
+        List<EventProfile> activeEvents = eventCollector.getActiveProfiles();
+        double totalMs = eventCollector.getTotalEventTimeMs();
+        long totalCalls = eventCollector.getTotalEventCount();
+
+        sendMessage(playerData, "=== Event Handler Timing ===", GOLD);
+        sendMessage(playerData, String.format("Total calls: %s | Total time: %s",
+            FormatUtil.formatCount(totalCalls), FormatUtil.formatMs(totalMs)), WHITE);
+        sendMessage(playerData, String.format("Tracked events: %d | Active: %d",
+            events.size(), activeEvents.size()), WHITE);
+        sendMessage(playerData, "", WHITE);
+
+        if (activeEvents.isEmpty()) {
+            sendMessage(playerData, "No events have been triggered yet.", GRAY);
+            sendMessage(playerData, "Play on the server to generate event data.", GRAY);
+        } else {
+            int rank = 1;
+            for (EventProfile event : activeEvents) {
+                if (rank > limit) break;
+
+                // Color based on avg time - highlight slow events
+                Color eventColor = event.getAvgTimeMs() > 1.0 ? YELLOW :
+                    (event.getAvgTimeMs() > 0.1 ? WHITE : GRAY);
+
+                String line = String.format("%2d. %s",
+                    rank, FormatUtil.padRight(event.getEventName(), 20));
+                sendMessage(playerData, line, eventColor);
+
+                sendMessage(playerData, String.format("    Calls: %s | Total: %s | Avg: %s",
+                    FormatUtil.formatCount(event.getCallCount()),
+                    FormatUtil.formatMs(event.getTotalTimeMs()),
+                    FormatUtil.formatMs(event.getAvgTimeMs())), GRAY);
+
+                sendMessage(playerData, String.format("    Min: %s | Max: %s",
+                    FormatUtil.formatMs(event.getMinTimeMs()),
+                    FormatUtil.formatMs(event.getMaxTimeMs())), GRAY);
+
+                rank++;
+            }
+
+            if (activeEvents.size() > limit) {
+                sendMessage(playerData, String.format("... and %d more events",
+                    activeEvents.size() - limit), GRAY);
+            }
+        }
+
+        sendMessage(playerData, "", WHITE);
+        sendMessage(playerData, "Note: Times include all handlers for each event type.", GRAY);
+        sendMessage(playerData, "============================", GOLD);
     }
 
     private void showEntities(PlayerRef playerData, World world) {
@@ -401,6 +498,25 @@ public class ProfilerCommand extends AbstractPlayerCommand {
             jvmSection.put("totalGcTimeMs", jvm.getTotalGcTimeMs());
             report.put("jvm", jvmSection);
 
+            // Events section
+            EventTimingCollector eventCollector = plugin.getEventTimingCollector();
+            List<EventProfile> eventProfiles = eventCollector.getActiveProfiles();
+            Map<String, Object> eventsSection = new HashMap<>();
+            eventsSection.put("totalCalls", eventCollector.getTotalEventCount());
+            eventsSection.put("totalTimeMs", eventCollector.getTotalEventTimeMs());
+            eventsSection.put("events", eventProfiles.stream().map(e -> {
+                Map<String, Object> eventMap = new HashMap<>();
+                eventMap.put("name", e.getEventName());
+                eventMap.put("className", e.getEventClassName());
+                eventMap.put("callCount", e.getCallCount());
+                eventMap.put("totalTimeMs", e.getTotalTimeMs());
+                eventMap.put("avgTimeMs", e.getAvgTimeMs());
+                eventMap.put("minTimeMs", e.getMinTimeMs());
+                eventMap.put("maxTimeMs", e.getMaxTimeMs());
+                return eventMap;
+            }).toList());
+            report.put("events", eventsSection);
+
             // Write to file
             Path exportDir = plugin.getExportDirectory();
             Files.createDirectories(exportDir);
@@ -455,10 +571,12 @@ public class ProfilerCommand extends AbstractPlayerCommand {
             return;
         }
 
-        // Note: The actual metric reset would depend on the Hytale API
-        // For now, we just acknowledge the command
-        sendMessage(playerData, "Metrics reset is not directly supported.", YELLOW);
-        sendMessage(playerData, "Metrics will naturally reset over time as new samples are collected.", GRAY);
+        // Reset event timing statistics
+        plugin.getEventTimingCollector().reset();
+        sendMessage(playerData, "Event timing statistics have been reset.", GREEN);
+
+        // Note: ECS system metrics are managed by Hytale's HistoricMetric and cannot be reset
+        sendMessage(playerData, "Note: ECS system metrics are managed by Hytale and reset over time.", GRAY);
     }
 
     private void sendMessage(PlayerRef playerData, String text, Color color) {

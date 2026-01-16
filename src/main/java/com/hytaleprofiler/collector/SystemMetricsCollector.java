@@ -3,11 +3,14 @@ package com.hytaleprofiler.collector;
 import com.hytaleprofiler.data.ModProfile;
 import com.hytaleprofiler.data.SystemProfile;
 import com.hytaleprofiler.util.FormatUtil;
+import com.hypixel.hytale.component.ComponentRegistry;
 import com.hypixel.hytale.component.Store;
+import com.hypixel.hytale.component.system.ISystem;
 import com.hypixel.hytale.metrics.metric.HistoricMetric;
 import com.hypixel.hytale.server.core.universe.world.World;
 import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
 
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -21,6 +24,10 @@ public class SystemMetricsCollector {
 
     private static final double NANOS_PER_MS = 1_000_000.0;
 
+    // Cached reflection field
+    private Field systemsField;
+    private boolean reflectionFailed = false;
+
     /**
      * Collect system profiles from the world's entity store.
      */
@@ -32,17 +39,25 @@ public class SystemMetricsCollector {
             return Collections.emptyList();
         }
 
+        // Try to get system names via reflection
+        String[] systemNames = getSystemNames(store);
+
         List<SystemProfile> profiles = new ArrayList<>();
 
         for (int i = 0; i < systemMetrics.length; i++) {
             HistoricMetric metric = systemMetrics[i];
             if (metric == null) continue;
 
-            // Since we can't easily get system names from the Store API,
-            // use a generic name based on index
-            String className = "System_" + i;
-            String simpleName = "System " + i;
-            String modName = "Unknown";
+            // Get the system class name
+            String className;
+            if (systemNames != null && i < systemNames.length && systemNames[i] != null) {
+                className = systemNames[i];
+            } else {
+                className = "System_" + i;
+            }
+
+            String simpleName = FormatUtil.simpleClassName(className);
+            String modName = FormatUtil.extractModName(className);
 
             double avgMs = metric.getAverage(0) / NANOS_PER_MS;
             double minMs = metric.calculateMin(0) / NANOS_PER_MS;
@@ -59,6 +74,41 @@ public class SystemMetricsCollector {
         // Sort by average time descending (slowest first)
         Collections.sort(profiles);
         return profiles;
+    }
+
+    /**
+     * Get system names via reflection from the ComponentRegistry.
+     */
+    private String[] getSystemNames(Store<EntityStore> store) {
+        if (reflectionFailed) {
+            return null;
+        }
+
+        try {
+            ComponentRegistry<EntityStore> registry = store.getRegistry();
+
+            // Get the systems array via reflection
+            if (systemsField == null) {
+                systemsField = ComponentRegistry.class.getDeclaredField("systems");
+                systemsField.setAccessible(true);
+            }
+
+            Object systemsObj = systemsField.get(registry);
+            if (systemsObj instanceof ISystem<?>[] systems) {
+                String[] names = new String[systems.length];
+                for (int i = 0; i < systems.length; i++) {
+                    if (systems[i] != null) {
+                        names[i] = systems[i].getClass().getName();
+                    }
+                }
+                return names;
+            }
+        } catch (Exception e) {
+            // Reflection failed, fall back to generic names
+            reflectionFailed = true;
+        }
+
+        return null;
     }
 
     /**
