@@ -1,0 +1,9 @@
+{
+    "Group": "cryptobench",
+    "Name": "HytaleProfiler",
+    "Version": "1.0.0",
+    "Main": "com.hytaleprofiler.HytaleProfiler",
+    "Description": "Server profiler for Hytale - TPS, memory, and system metrics",
+    "Authors": [],
+    "Dependencies": {}
+}
